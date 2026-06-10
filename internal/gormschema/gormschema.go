@@ -67,7 +67,11 @@ func From(db *gorm.DB, model any) (*schema.Model, error) {
 	}
 
 	if cached, ok := cache.Load(t); ok {
-		return cached.(*schema.Model), nil
+		m, ok := cached.(*schema.Model)
+		if !ok {
+			panic("strapgorm/gormschema: cache contains unexpected type")
+		}
+		return m, nil
 	}
 
 	namer := namerFor(db)
@@ -79,7 +83,11 @@ func From(db *gorm.DB, model any) (*schema.Model, error) {
 	m := mapSchema(t, gs)
 
 	actual, _ := cache.LoadOrStore(t, m)
-	return actual.(*schema.Model), nil
+	stored, ok := actual.(*schema.Model)
+	if !ok {
+		panic("strapgorm/gormschema: cache contains unexpected type")
+	}
+	return stored, nil
 }
 
 // namerFor returns the GORM Namer to drive table/column name resolution: the
@@ -246,7 +254,7 @@ func jsonNameOf(gf *gormschema.Field) string {
 // always nullable; otherwise the column is nullable unless GORM marked it
 // NotNull (via a not-null tag or primary-key designation).
 func nullableOf(gf *gormschema.Field) bool {
-	if gf.FieldType != nil && gf.FieldType.Kind() == reflect.Ptr {
+	if gf.FieldType != nil && gf.FieldType.Kind() == reflect.Pointer {
 		return true
 	}
 	if isSQLNull(deref(gf.FieldType)) {
@@ -301,11 +309,19 @@ func classify(t reflect.Type) schema.Kind {
 func searchableOf(t reflect.Type) []string {
 	if reflect.PointerTo(t).Implements(searchableType) {
 		v := reflect.New(t)
-		return v.Interface().(schema.Searchable).Searchable()
+		s, ok := v.Interface().(schema.Searchable)
+		if !ok {
+			panic("strapgorm/gormschema: Implements check guarantees Searchable")
+		}
+		return s.Searchable()
 	}
 	if t.Implements(searchableType) {
 		v := reflect.Zero(t)
-		return v.Interface().(schema.Searchable).Searchable()
+		s, ok := v.Interface().(schema.Searchable)
+		if !ok {
+			panic("strapgorm/gormschema: Implements check guarantees Searchable")
+		}
+		return s.Searchable()
 	}
 	return nil
 }

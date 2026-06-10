@@ -75,7 +75,7 @@ func New[T any](db *gorm.DB) *Builder[T] {
 	}
 
 	if db != nil && db.Dialector != nil {
-		b.dialect = dialect.ByName(db.Dialector.Name())
+		b.dialect = dialect.ByName(db.Name())
 	} else {
 		b.dialect = dialect.Postgres
 	}

@@ -180,14 +180,22 @@ func Of[T any]() (*Model, error) {
 func Get(t reflect.Type) (*Model, error) {
 	t = deref(t)
 	if cached, ok := cache.Load(t); ok {
-		return cached.(*Model), nil
+		m, ok := cached.(*Model)
+		if !ok {
+			panic("strapgorm/schema: cache contains unexpected type")
+		}
+		return m, nil
 	}
 	m, err := Parse(t)
 	if err != nil {
 		return nil, err
 	}
 	actual, _ := cache.LoadOrStore(t, m)
-	return actual.(*Model), nil
+	stored, ok := actual.(*Model)
+	if !ok {
+		panic("strapgorm/schema: cache contains unexpected type")
+	}
+	return stored, nil
 }
 
 // Parse introspects t and returns its Model.
@@ -274,7 +282,7 @@ func collectFields(t reflect.Type, m *Model) {
 func scalarField(sf reflect.StructField, tag gormTagInfo) (Field, bool) {
 	ft := sf.Type
 	nullable := false
-	if ft.Kind() == reflect.Ptr {
+	if ft.Kind() == reflect.Pointer {
 		nullable = true
 		ft = ft.Elem()
 	}
@@ -391,11 +399,19 @@ func ownerHasField(owner reflect.Type, candidate string) bool {
 func searchableOf(t reflect.Type) []string {
 	if reflect.PointerTo(t).Implements(searchableType) {
 		v := reflect.New(t)
-		return v.Interface().(Searchable).Searchable()
+		s, ok := v.Interface().(Searchable)
+		if !ok {
+			panic("strapgorm/schema: Implements check guarantees Searchable")
+		}
+		return s.Searchable()
 	}
 	if t.Implements(searchableType) {
 		v := reflect.Zero(t)
-		return v.Interface().(Searchable).Searchable()
+		s, ok := v.Interface().(Searchable)
+		if !ok {
+			panic("strapgorm/schema: Implements check guarantees Searchable")
+		}
+		return s.Searchable()
 	}
 	return nil
 }
@@ -532,7 +548,7 @@ func deref(t reflect.Type) reflect.Type {
 	if t == nil {
 		return nil
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t

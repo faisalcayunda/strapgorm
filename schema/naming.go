@@ -80,9 +80,12 @@ func Pluralize(word string) string {
 	case strings.HasSuffix(lower, "ch"),
 		strings.HasSuffix(lower, "sh"),
 		strings.HasSuffix(lower, "s"),
-		strings.HasSuffix(lower, "x"),
-		strings.HasSuffix(lower, "z"):
+		strings.HasSuffix(lower, "x"):
 		return prefix + lower + "es"
+	case strings.HasSuffix(lower, "z"):
+		// English convention: consonant + z doubles the z before "es"
+		// (quiz -> quizzes, fez -> fezzes).
+		return prefix + lower + "zes"
 	default:
 		return prefix + lower + "s"
 	}

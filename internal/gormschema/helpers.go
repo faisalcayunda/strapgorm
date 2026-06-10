@@ -14,7 +14,7 @@ func deref(t reflect.Type) reflect.Type {
 	if t == nil {
 		return nil
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t

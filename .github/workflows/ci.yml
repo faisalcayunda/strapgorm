@@ -75,11 +75,25 @@ jobs:
           go-version: "1.25"
           cache: true
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+      # golangci-lint-action@v7 ships golangci-lint v2, which supports go1.25
+      # targets (built with go1.24+, using the v2 config schema).
+      # Pin the exact version so CI matches the locally-verified linter.
+      - name: golangci-lint (core module)
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m
+
+      - name: Download examples dependencies
+        working-directory: examples
+        run: go mod download
+
+      - name: golangci-lint (examples module)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+          working-directory: examples
 
   examples:
     name: examples module (build only)

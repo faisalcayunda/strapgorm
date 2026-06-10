@@ -1,56 +1,68 @@
-# golangci-lint configuration for strapgorm.
-# Docs: https://golangci-lint.run/usage/configuration/
-
-run:
-  timeout: 5m
-  # The examples are a separate module with heavyweight deps; lint them on their
-  # own (cd examples && golangci-lint run) rather than from the core module.
-  skip-dirs:
-    - examples
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet        # reports suspicious constructs
-    - staticcheck  # comprehensive static analysis
-    - errcheck     # unchecked errors
-    - ineffassign  # ineffectual assignments
-    - revive       # golint-style style/lint rules
-    - unused       # unused code
-    - gofmt        # formatting must match gofmt
-    - misspell     # common English misspellings in comments
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment   # struct field ordering is intentional for readability
-  revive:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    govet:
+      disable:
+        - fieldalignment
+      enable-all: true
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - checkPrivateReceivers
+          severity: warning
+        - name: package-comments
+        - name: var-naming
+        - name: error-strings
+        - name: error-return
+        - name: context-as-argument
+        - name: indent-error-flow
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: exported
-        severity: warning
-        arguments:
-          - checkPrivateReceivers
-      - name: package-comments
-      - name: var-naming
-      - name: error-strings
-      - name: error-return
-      - name: context-as-argument
-      - name: indent-error-flow
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
-  misspell:
-    locale: US
-
+      - linters:
+          - revive
+        path: _test\.go
+      # Test code legitimately uses unguarded type assertions in if-else chains
+      # after an error check (e.g. got.(time.Time) where err already checked).
+      - linters:
+          - errcheck
+        path: _test\.go
+        text: "Error return value is not checked"
+      - path: schema/schema\.go
+        text: cyclomatic
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # Test files may use dot-imports and skip some exported-doc requirements.
-    - path: _test\.go
-      linters:
-        - revive
-    # The reflection helpers in schema intentionally read every struct field.
-    - path: schema/schema\.go
-      text: "cyclomatic"
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -42,7 +42,7 @@ func TestPluralize(t *testing.T) {
 		{"company", "companies"},
 		{"box", "boxes"},
 		{"class", "classes"},
-		{"quiz", "quizes"},
+		{"quiz", "quizzes"},
 		{"branch", "branches"},
 		{"dish", "dishes"},
 		{"day", "days"}, // vowel + y stays as "...ys"
