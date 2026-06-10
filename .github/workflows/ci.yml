@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build & test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.25"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # Fetch GORM + drivers so the full module (facade, gormschema) compiles.
+      - name: Download modules
+        run: go mod download
+
+      - name: gofmt
+        run: |
+          fmtout="$(gofmt -l .)"
+          if [ -n "$fmtout" ]; then
+            echo "::error::These files are not gofmt-clean:"
+            echo "$fmtout"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # Core (GORM-free) packages run with the race detector and coverage. The
+      # GORM-dependent facade/gormschema compile under `go vet ./...` above; their
+      # behavioral coverage comes from the integration job below.
+      - name: Test (race + coverage, core packages)
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic \
+            ./schema ./dialect ./paginate ./internal/joins \
+            ./filter ./sort ./fields ./search ./parser ./populate
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.go-version }}
+          path: coverage.out
+          if-no-files-found: ignore
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  examples:
+    name: examples module (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: examples/go.sum
+
+      # The examples are a separate module (replace => ..) and pull gin/fiber/echo.
+      # Build them to guarantee the public facade stays example-compatible.
+      - name: Build examples
+        working-directory: examples
+        run: |
+          go mod download
+          go build ./...
+
+  # NOTE: Integration tests that exercise the GORM facade against a real database
+  # (Postgres/MySQL) are intentionally NOT run here. They require live database
+  # services (for example via `services:` containers or testcontainers) and the
+  # DATABASE_URL/DSN environment. Add a dedicated job with a `services:` block
+  # (postgres:16, mysql:8) and run `go test -tags=integration ./...` once those
+  # tests land. The jobs above cover unit tests, vet, formatting, and linting.
+  integration:
+    name: integration (placeholder — needs a database)
+    runs-on: ubuntu-latest
+    if: false # enable once integration tests + DB services are added
+    steps:
+      - run: echo "Integration tests require a live Postgres/MySQL service."
