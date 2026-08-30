@@ -50,6 +50,23 @@ type Organization struct {
 	Name string `json:"name"`
 }
 
+// Category and Connection are the fixture for relation-scope tests: a Category
+// HasMany Connections, and a connection carries the UserID it belongs to, so a
+// scope like "connections.user_id = ?" restricts a relation to one user's rows.
+type Category struct {
+	ID          uint         `json:"id" gorm:"primaryKey"`
+	Name        string       `json:"name"`
+	Connections []Connection `json:"connections"`
+}
+
+// Connection is the scoped relation row.
+type Connection struct {
+	ID         uint   `json:"id" gorm:"primaryKey"`
+	CategoryID uint   `json:"category_id"`
+	UserID     uint   `json:"user_id"`
+	Status     string `json:"status"`
+}
+
 // newDryRunDB opens a DryRun *gorm.DB backed by the pure-Go SQLite driver. No
 // real database file is created and no statement is executed; the session only
 // renders SQL. It fails the test if the driver cannot be opened.
@@ -229,6 +246,110 @@ func TestCustomOperator(t *testing.T) {
 		t.Fatalf("ToSQL: %v", err)
 	}
 	assertContains(t, sql, "users.name IS NULL")
+}
+
+func TestToSQLRelationScopeInJoinOn(t *testing.T) {
+	db := newDryRunDB(t)
+	// The scope predicate must land in the relation's JOIN ON clause (ANDed onto
+	// the join condition), never in a top-level WHERE, so LEFT JOIN semantics for
+	// populate are preserved.
+	sql, vars, err := New[Category](db).
+		WithRelationScope("connections", "connections.user_id = ?", uint(42)).
+		Filters(map[string]any{"connections.status": map[string]any{"$eq": "connected"}}).
+		ToSQL(context.Background(), defaultPage())
+	if err != nil {
+		t.Fatalf("ToSQL: %v", err)
+	}
+	// The scope is appended to the ON clause of the connections join.
+	assertContains(t, sql, "ON connections.category_id = categories.id AND (connections.user_id = ?)")
+	// The filter on the scoped relation still compiles to a WHERE predicate.
+	assertContains(t, sql, "connections.status = ?")
+	// The scope's operand is bound, never interpolated.
+	assertVarsContain(t, vars, uint(42))
+}
+
+func TestToSQLRelationScopeMultipleAndTogether(t *testing.T) {
+	db := newDryRunDB(t)
+	// Two scopes on the same relation AND together inside the ON clause.
+	sql, vars, err := New[Category](db).
+		WithRelationScope("connections", "connections.user_id = ?", uint(7)).
+		WithRelationScope("connections", "connections.status <> ?", "revoked").
+		Sort([]string{"connections.status:asc"}).
+		ToSQL(context.Background(), defaultPage())
+	if err != nil {
+		t.Fatalf("ToSQL: %v", err)
+	}
+	assertContains(t, sql, "AND (connections.user_id = ?) AND (connections.status <> ?)")
+	assertVarsContain(t, vars, uint(7))
+	assertVarsContain(t, vars, "revoked")
+}
+
+func TestRelationScopeUnknownRelationErrors(t *testing.T) {
+	db := newDryRunDB(t)
+	_, _, err := New[Category](db).
+		WithRelationScope("nope", "nope.user_id = ?", 1).
+		ToSQL(context.Background(), defaultPage())
+	if err == nil {
+		t.Fatal("expected error for unknown relation, got nil")
+	}
+}
+
+// TestRelationScopePopulateReturnsBaseRowsScoped runs against a real (non-DryRun)
+// sqlite database to prove the populate semantics ToSQL cannot show: every base
+// row is returned (LEFT JOIN semantics), with only the scoped relation rows
+// attached.
+func TestRelationScopePopulateReturnsBaseRowsScoped(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open: %v", err)
+	}
+	if err := db.AutoMigrate(&Category{}, &Connection{}); err != nil {
+		t.Fatalf("AutoMigrate: %v", err)
+	}
+
+	// Two categories. cat 1 has connections for user 42 and user 99; cat 2 has a
+	// single connection for user 42. A scope to user 42 must keep both categories
+	// but drop user 99's connection.
+	seed := []Category{
+		{ID: 1, Name: "alpha", Connections: []Connection{
+			{ID: 1, CategoryID: 1, UserID: 42, Status: "connected"},
+			{ID: 2, CategoryID: 1, UserID: 99, Status: "connected"},
+		}},
+		{ID: 2, Name: "beta", Connections: []Connection{
+			{ID: 3, CategoryID: 2, UserID: 42, Status: "disconnected"},
+		}},
+	}
+	if err := db.Create(&seed).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cats, err := New[Category](db).
+		WithRelationScope("connections", "connections.user_id = ?", uint(42)).
+		Populate([]string{"connections"}).
+		Sort([]string{"id:asc"}).
+		Find(context.Background())
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+
+	// Populate uses a LEFT JOIN / separate preload query, so both base rows remain.
+	if len(cats) != 2 {
+		t.Fatalf("got %d categories, want 2 (all base rows must survive the scope)", len(cats))
+	}
+	for _, c := range cats {
+		for _, conn := range c.Connections {
+			if conn.UserID != 42 {
+				t.Errorf("category %d has a connection for user %d; scope should keep only user 42", c.ID, conn.UserID)
+			}
+		}
+	}
+	// cat 1 had two connections; only user 42's should remain.
+	if got := len(cats[0].Connections); got != 1 {
+		t.Errorf("category 1 attached %d connections, want 1 (only user 42)", got)
+	}
+	if got := len(cats[1].Connections); got != 1 {
+		t.Errorf("category 2 attached %d connections, want 1", got)
+	}
 }
 
 // assertContains fails the test when substr is not present in s.

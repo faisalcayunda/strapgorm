@@ -51,10 +51,50 @@ type Builder[T any] struct {
 	rawFields   []string
 	rawPopulate []string
 
+	// relScopes holds per-request relation-scope predicates registered via
+	// WithRelationScope, keyed by the canonical relation name (the join-registry
+	// key). Each is ANDed into the relation's JOIN ON clause and its Preload.
+	relScopes map[string]*relScope
+
 	// err latches the first construction-time error (a failed model resolution
-	// in New) so terminal methods can report it instead of panicking on a nil
-	// model.
+	// in New, or an unknown relation in WithRelationScope) so terminal methods
+	// can report it instead of panicking on a nil model.
 	err error
+}
+
+// relScope is the set of scope predicates registered for one relation. conds are
+// ANDed together into both the relation's JOIN ON clause and its Preload query.
+type relScope struct {
+	// association is the GORM Preload association name (the related field's Go
+	// field name), used to attach the scope to the matching Preload.
+	association string
+	conds       []scopeCond
+}
+
+// scopeCond is a single raw-SQL predicate and its bound arguments.
+type scopeCond struct {
+	sql  string
+	args []any
+}
+
+// sql renders the conjunction of every registered predicate, each parenthesized
+// so an internal OR cannot bind loosely. It is safe to embed in either a JOIN ON
+// clause or a Preload condition.
+func (s *relScope) sql() string {
+	parts := make([]string, len(s.conds))
+	for i, c := range s.conds {
+		parts[i] = "(" + c.sql + ")"
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// args returns the bound arguments for every predicate in placeholder order.
+func (s *relScope) args() []any {
+	var out []any
+	for _, c := range s.conds {
+		out = append(out, c.args...)
+	}
+	return out
 }
 
 // New returns a Builder bound to db for the model type T.
@@ -111,6 +151,57 @@ func (b *Builder[T]) WithOperators(reg *filter.Registry) *Builder[T] {
 	if reg != nil {
 		b.ops = reg
 	}
+	return b
+}
+
+// WithRelationScope registers a predicate ANDed into the named relation's JOIN
+// condition (for filters and sort) and its Preload (for populate), so the
+// relation is scoped per request, for example to the current user's rows in a
+// multi-tenant query.
+//
+// relation is a top-level relation name on T (its snake_case name or lowercased
+// Go field alias); it is validated against the model's relation whitelist and an
+// unknown relation latches an error surfaced from the terminal call, consistent
+// with how unknown filter fields are handled. cond is a raw SQL boolean using
+// "?" placeholders; the columns it references should be table-qualified (for
+// example "connections.user_id = ?") so the same predicate is valid both in the
+// JOIN ON clause and in the standalone Preload query. args are always bound as
+// parameters, never interpolated. Multiple calls for the same relation AND
+// together. A blank cond is ignored.
+//
+// Because the scope lands in the JOIN ON clause (not a top-level WHERE), LEFT
+// JOIN semantics for populate are preserved: every base row is still returned,
+// with only the scoped relation rows attached. A filter that matches on a
+// scoped relation column then naturally restricts the base rows to those with a
+// matching scoped relation row.
+//
+// Only top-level relations are supported; a dotted (nested) relation path is
+// rejected as an unknown relation.
+func (b *Builder[T]) WithRelationScope(relation, cond string, args ...any) *Builder[T] {
+	if b.err != nil {
+		return b
+	}
+	if strings.TrimSpace(cond) == "" {
+		return b
+	}
+	if b.model == nil {
+		b.err = fmt.Errorf("strapgorm: WithRelationScope %q: model not resolved", relation)
+		return b
+	}
+	rel, ok := b.model.Relation(relation)
+	if !ok {
+		b.err = fmt.Errorf("strapgorm: WithRelationScope: %w: %q", schema.ErrUnknownRelation, relation)
+		return b
+	}
+	if b.relScopes == nil {
+		b.relScopes = make(map[string]*relScope)
+	}
+	sc, ok := b.relScopes[rel.Name]
+	if !ok {
+		sc = &relScope{association: rel.GoField}
+		b.relScopes[rel.Name] = sc
+	}
+	sc.conds = append(sc.conds, scopeCond{sql: cond, args: append([]any(nil), args...)})
 	return b
 }
 
@@ -355,6 +446,14 @@ func (b *Builder[T]) planOn(ctx context.Context, base *gorm.DB) (compiledPlan, e
 
 	jr := joins.NewRegistry(b.model.Table)
 
+	// Register relation scopes before any relation JOIN is built, so filter/sort
+	// pick them up when they Ensure the join.
+	for name, sc := range b.relScopes {
+		for _, c := range sc.conds {
+			jr.AddScope(name, c.sql, c.args)
+		}
+	}
+
 	whereParts := make([]string, 0, 2)
 	whereArgs := make([]any, 0, 4)
 
@@ -413,7 +512,7 @@ func (b *Builder[T]) planOn(ctx context.Context, base *gorm.DB) (compiledPlan, e
 	session := base.WithContext(ctx).Model(new(T))
 
 	for _, j := range jr.Joins() {
-		session = session.Joins(j.SQL)
+		session = session.Joins(j.SQL, j.Args...)
 	}
 
 	if len(whereParts) > 0 {
@@ -424,12 +523,38 @@ func (b *Builder[T]) planOn(ctx context.Context, base *gorm.DB) (compiledPlan, e
 		if spec.All {
 			// The wildcard "*" maps to GORM's preload-every-association sentinel.
 			session = session.Preload(clause.Associations)
+			// A scoped relation still needs its predicate, so re-issue it as a
+			// named Preload (which overrides the wildcard's unscoped load).
+			for _, sc := range b.relScopes {
+				session = session.Preload(sc.association, prependCond(sc)...)
+			}
+			continue
+		}
+		if sc := b.scopeForAssociation(spec.Association); sc != nil {
+			session = session.Preload(spec.Association, prependCond(sc)...)
 			continue
 		}
 		session = session.Preload(spec.Association)
 	}
 
 	return compiledPlan{session: session, columns: columns, orders: orders}, nil
+}
+
+// scopeForAssociation returns the relation scope whose Preload association name
+// matches assoc, or nil when none is registered.
+func (b *Builder[T]) scopeForAssociation(assoc string) *relScope {
+	for _, sc := range b.relScopes {
+		if sc.association == assoc {
+			return sc
+		}
+	}
+	return nil
+}
+
+// prependCond builds the variadic argument list for a scoped GORM Preload: the
+// rendered condition string followed by its bound parameters.
+func prependCond(sc *relScope) []any {
+	return append([]any{sc.sql()}, sc.args()...)
 }
 
 // qualifyColumns prefixes each bare column with the root table so the projection
