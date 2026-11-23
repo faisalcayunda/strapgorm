@@ -111,11 +111,11 @@ func splitDirective(entry string) (field string, dir direction, err error) {
 
 // rootOrder builds an ORDER BY expression for a field on the root model.
 func rootOrder(m *schema.Model, field string, dir direction) (string, error) {
-	column, ok := m.ColumnFor(field)
-	if !ok {
+	f, ok := m.Field(field)
+	if !ok || f.Hidden {
 		return "", fmt.Errorf("strapgorm/sort: %w: %q", schema.ErrUnknownField, field)
 	}
-	return qualify(m.Table, column, dir), nil
+	return qualify(m.Table, f.Column, dir), nil
 }
 
 // relationOrder builds an ORDER BY expression for a subfield reached through a
@@ -127,7 +127,7 @@ func relationOrder(m *schema.Model, relName, sub string, dir direction, jr *join
 	}
 
 	rel, ok := m.Relation(relName)
-	if !ok {
+	if !ok || rel.Hidden {
 		return "", fmt.Errorf("strapgorm/sort: %w: %q", schema.ErrUnknownRelation, relName)
 	}
 
@@ -137,10 +137,11 @@ func relationOrder(m *schema.Model, relName, sub string, dir direction, jr *join
 	if err != nil {
 		return "", fmt.Errorf("strapgorm/sort: cannot introspect related model for relation %q: %w", relName, err)
 	}
-	column, ok := related.ColumnFor(sub)
-	if !ok {
+	subField, ok := related.Field(sub)
+	if !ok || subField.Hidden {
 		return "", fmt.Errorf("strapgorm/sort: %w: %q (relation %q)", schema.ErrUnknownField, sub, relName)
 	}
+	column := subField.Column
 
 	alias := jr.Ensure(rel.Name, func() joins.Join {
 		return buildJoin(m, rel, related)

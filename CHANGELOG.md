@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `strapgorm:"hidden"` struct tag: a tagged field or relation is excluded from the
+  filter and sort whitelists and answers with the same `ErrUnknownField` /
+  `ErrUnknownRelation` as a name the model does not have. `schema.Field.Hidden`,
+  `schema.Relation.Hidden` and `schema.IsHidden` expose it. Structs without the
+  tag behave as before.
 - `examples/` as a standalone Go module (so the web-framework and integration
   dependencies stay out of the core module graph) with runnable `GET /users`
   handlers for Gin, Fiber, and Echo.

@@ -138,7 +138,7 @@ func buildGrouping(m *schema.Model, key string, value any, d dialect.Dialect, re
 // operators on the same field.
 func buildField(m *schema.Model, jsonName string, value any, d dialect.Dialect, reg *Registry, jr *joins.Registry) (Clause, error) {
 	field, ok := m.Field(jsonName)
-	if !ok {
+	if !ok || field.Hidden {
 		return Clause{}, fmt.Errorf("%w: %q", schema.ErrUnknownField, jsonName)
 	}
 	col := qualify(jr.RootTable(), field.Column)
@@ -153,7 +153,7 @@ func buildRelation(m *schema.Model, key string, value any, d dialect.Dialect, re
 	relName, rest, nested := strings.Cut(key, ".")
 
 	rel, ok := m.Relation(relName)
-	if !ok {
+	if !ok || rel.Hidden {
 		return Clause{}, fmt.Errorf("%w: %q", schema.ErrUnknownRelation, relName)
 	}
 
@@ -204,7 +204,7 @@ func buildRelationField(related *schema.Model, alias, subKey string, value any, 
 	}
 
 	field, ok := related.Field(subKey)
-	if !ok {
+	if !ok || field.Hidden {
 		return Clause{}, fmt.Errorf("%w: %q", schema.ErrUnknownField, subKey)
 	}
 	col := qualify(alias, field.Column)
@@ -578,11 +578,12 @@ func ensureJoin(jr *joins.Registry, rel schema.Relation) string {
 }
 
 // isRelationKey reports whether key names a relation of m, accepting both a bare
-// relation name and the "relation.subfield" dot-notation form.
+// relation name and the "relation.subfield" dot-notation form. A hidden relation
+// is not a relation here, so its key falls through to the unknown-field error.
 func isRelationKey(m *schema.Model, key string) bool {
 	name, _, _ := strings.Cut(key, ".")
-	_, ok := m.Relation(name)
-	return ok
+	rel, ok := m.Relation(name)
+	return ok && !rel.Hidden
 }
 
 // qualify joins a table/alias and a column with a dot. Both arguments originate

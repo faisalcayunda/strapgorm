@@ -80,6 +80,10 @@ type Field struct {
 	// Nullable reports whether the column may hold NULL: true for pointer
 	// fields, sql.Null* wrapper types, or a gorm tag carrying "default:null".
 	Nullable bool
+	// Hidden reports whether the field carries the `strapgorm:"hidden"` tag.
+	// filter and sort answer a hidden field with ErrUnknownField, exactly as
+	// for a field the model does not have. fields and search still resolve it.
+	Hidden bool
 }
 
 // RelationType classifies the cardinality and ownership of a relation.
@@ -118,6 +122,10 @@ type Relation struct {
 	JoinTable string
 	// RelatedType is the related struct's Go type (pointer indirection removed).
 	RelatedType reflect.Type
+	// Hidden reports whether the relation carries the `strapgorm:"hidden"` tag.
+	// filter and sort answer a hidden relation with the error they give a
+	// relation the model does not have. populate still resolves it.
+	Hidden bool
 }
 
 // Model is the complete introspected metadata for a struct type.
@@ -165,6 +173,25 @@ func (m *Model) ColumnFor(jsonName string) (string, bool) {
 type Searchable interface {
 	// Searchable returns the JSON names of the searchable fields.
 	Searchable() []string
+}
+
+// TagKey is the struct-tag key strapgorm reads for its own options.
+const TagKey = "strapgorm"
+
+// optionHidden is the TagKey option that removes a field or relation from the
+// filter and sort whitelists.
+const optionHidden = "hidden"
+
+// IsHidden reports whether tag carries the hidden option, as in
+// `strapgorm:"hidden"`. The value is a comma-separated option list, so
+// future options can share the tag.
+func IsHidden(tag reflect.StructTag) bool {
+	for _, opt := range strings.Split(tag.Get(TagKey), ",") {
+		if strings.TrimSpace(opt) == optionHidden {
+			return true
+		}
+	}
+	return false
 }
 
 var cache sync.Map // map[reflect.Type]*Model
@@ -256,6 +283,7 @@ func collectFields(t reflect.Type, m *Model) {
 		}
 
 		if rel, ok := relationFor(t, sf, gormTag); ok {
+			rel.Hidden = IsHidden(sf.Tag)
 			m.Relations[rel.Name] = rel
 			if alias := strings.ToLower(sf.Name); alias != rel.Name {
 				if _, exists := m.Relations[alias]; !exists {
@@ -310,6 +338,7 @@ func scalarField(sf reflect.StructField, tag gormTagInfo) (Field, bool) {
 		Kind:     kind,
 		GoType:   ft,
 		Nullable: nullable,
+		Hidden:   IsHidden(sf.Tag),
 	}, true
 }
 

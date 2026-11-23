@@ -155,6 +155,7 @@ func mapField(gf *gormschema.Field) schema.Field {
 		Kind:     kind,
 		GoType:   ft,
 		Nullable: nullableOf(gf),
+		Hidden:   schema.IsHidden(gf.StructField.Tag),
 	}
 }
 
@@ -173,6 +174,9 @@ func mapRelation(rel *gormschema.Relationship) (schema.Relation, bool) {
 		Type:        relType,
 		OwnerKey:    "id",
 		RelatedType: relatedType(rel),
+	}
+	if rel.Field != nil {
+		out.Hidden = schema.IsHidden(rel.Field.StructField.Tag)
 	}
 	if rel.FieldSchema != nil {
 		out.Table = rel.FieldSchema.Table

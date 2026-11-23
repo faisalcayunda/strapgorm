@@ -373,6 +373,27 @@ and `examples/` — needs the GORM module and the database drivers. Run
 `go mod tidy` once (with network access) to fetch `gorm.io/gorm` and the drivers
 declared in `go.mod`; after that the full module builds and tests offline.
 
+## Hiding a field from filter and sort
+
+Every exported field is filterable and sortable by default. Tag a field or
+relation `strapgorm:"hidden"` to take it out of the filter and sort whitelists:
+
+```go
+type User struct {
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	Name      string `json:"name"`
+	LastLogin string `json:"last_login_ip,omitempty" strapgorm:"hidden"`
+	Secret    string `json:"-" strapgorm:"hidden"` // json:"-" alone does NOT hide it
+}
+```
+
+Filtering or sorting on a hidden field returns the same `ErrUnknownField` (or
+`ErrUnknownRelation` for a hidden relation) as a name the model does not have,
+including when it is reached through a relation, so a caller cannot probe which
+hidden columns exist. `fields`, `search` and `populate` are not affected: they
+only ever return values the caller's own response already controls. The tag is
+a comma-separated option list; `hidden` is the only option today.
+
 ## Security model
 
 Field names, relation names, and operators that come from a query string are
